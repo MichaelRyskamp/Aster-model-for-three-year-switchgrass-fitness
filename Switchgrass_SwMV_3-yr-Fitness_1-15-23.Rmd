@@ -1,0 +1,696 @@
+---
+title: "Three-year fitness of *Panicum virgatum* infected with switchgrass mosaic virus"
+author: "Michael P. Ryskamp and Charles J. Geyer"
+date: "January 8, 2023"
+output:
+  pdf_document:
+    extra_dependencies: tikz-cd
+    number_sections: yes
+  html_document:
+    df_print: paged
+  word_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+# R
+
+ * The version of R used to make this document is `r getRversion()`.
+
+ * The version of R package `rmarkdown` used to make this document is
+   `r packageVersion("rmarkdown")`.
+
+ * The version of R package `knitr` used to make this document is
+   `r packageVersion("knitr")`.
+
+ * The version of R package `aster` used to make this document is
+   `r packageVersion("aster")`.
+
+ * The version of R package `trust` used to make this document is
+   `r packageVersion("trust")`.
+
+ * The version of R package `numDeriv` used to make this document is
+   `r packageVersion("numDeriv")`.
+
+ * The version of R package `freshr` used to make this document is
+   `r packageVersion("freshr")`.
+
+Ensure a clean R global environment.
+```{r fresh}
+freshr::freshr()
+```
+
+Load R packages `aster` and `numDeriv`
+```{r label=libraries}
+library("aster")
+library("numDeriv")
+```
+
+Set global option.
+```{r options}
+# don't need this with R-4.0.0, it's the default there and forevermore
+# but it doesn't hurt and defends against users who haven't upgraded R
+options(stringsAsFactors = FALSE)
+```
+
+# Data
+
+```{r data}
+redata <- read.csv("redata_fin.csv")
+# "symp.extent" is the proportion of diseased tillers. Taken initially, 
+# in early summer 2017, and, for 2017 and 2018, 
+# taken at the end of season around the time 
+# we collected fitness metrics (panicle counts, lengths)
+
+
+sapply(redata, class)
+unique(redata$varb)
+str(redata)
+redata$PlantID <- as.factor(redata$PlantID)
+redata$Year <- as.factor(redata$Year)
+
+```
+
+# Graph
+
+We use the following aster graph for one individual.
+$$
+\begin{tikzcd}
+   \hphantom{1} & y_1 \arrow{r}{\text{Ber}} &
+   y_2 \arrow{r}{\text{Samp}} & y_3 \arrow{r}{\text{Poi}} & y_4
+   \\
+   1 \arrow{r}{\text{Poi}} \arrow{ru}{\text{Poi}} \arrow{rd}{\text{Poi}} &
+   y_5 \arrow{r}{\text{Ber}} &
+   y_6 \arrow{r}{\text{Samp}} & y_7 \arrow{r}{\text{Poi}} & y_8
+   \\
+   \hphantom{1} & y_9 \arrow{r}{\text{Ber}} &
+   y_{10} \arrow{r}{\text{Samp}} & y_{11} \arrow{r}{\text{Poi}} & y_{12}
+\end{tikzcd}
+$$
+In this graph the "rows" are years (2017, 2018, and 2019) and the "columns"
+are data within years: first tillers ($y_1$, $y_5$, and $y_9$),
+then panicles ($y_2$, $y_6$, and $y_{10}$),
+then sub-sampled panicles ($y_3$, $y_7$, and $y_{11}$),
+and finally (the terminal nodes) floret count ($y_4$, $y_8$, and $y_{12}$).
+
+After initial analysis we may change some Poisson to negative binomial
+(a kind of over-dispersed Poisson), but first we see whether that seems
+necessary.
+
+It is somewhat problematic that tiller counts for different years are
+for the same plant and these should be dependent.  We allow for such
+dependence (somewhat) by putting individual effects in the model.
+
+```{r graph.data}
+pred <- c(0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11)
+fam <- rep(c(2, 1, 1, 2), times = 3)
+fam
+vars <- unique(redata$varb)
+vars
+
+pred.names <- c("initial", vars)[pred + 1]
+foo <- cbind(pred.names, vars, fam)
+colnames(foo) <- c("predecessor", "successor", "family")
+foo
+
+fit <- as.numeric(grepl("floret", as.character(redata$varb)))
+redata <- data.frame(redata, fit = fit)
+ind <- as.factor(redata$id)
+redata <- data.frame(redata, ind = ind)
+
+redata <- subset(redata, redata$varb %in% vars)
+
+nnode <- length(vars)
+nind <- length(unique(redata$id))
+nnode * nind == nrow(redata)
+```
+
+# Initial Aster Models 
+
+## Fit models (Poisson)
+
+To start, we'll fit three models: a null model, a model with a fixed effect term for symptom extent (`symp.extent`) (a plant-level measure we assessed each growing season), and a third model that includes a term to describe variation at the individual level (`ind`).
+```{r aster.try.one, error=TRUE}
+anull <- aster(resp ~ varb,
+    pred, fam, varb, id, root, data = redata)
+
+aout.noind <- aster(resp ~ varb + fit : (symp.extent),
+    pred, fam, varb, id, root, data = redata)
+
+aout <- aster(resp ~ varb + fit : (symp.extent + ind),
+    pred, fam, varb, id, root, data = redata)
+
+
+
+anova(anull,aout.noind,aout)
+```
+The hypothesis test says both `symp.extent` and `ind` are statistically significant. The `ind` term helps us model the dependency of the tiller counts at the individual plant level, which were different among plants at the start of the experiment. Additionally, we also know (from other experiments) that there is a lot of variation in panicle lengths and floret production at the individual plant level. Therefore, going forward, we'll use the `ind` model as the base model as we evaluate residuals and over-dispersion.
+```{r aster.try.two}
+summary(aout, info.tol = 1e-9)
+```
+
+## Get Conditional and Unconditional Mean Value Parameters
+
+```{r aster.try.one.xi, error=TRUE}
+pout.cond <- predict(aout, model.type = "conditional",
+     is.always.parameter = TRUE, gradient = TRUE)
+xi <- pout.cond$fit
+class(xi)
+length(xi) == nind * nnode
+
+xi <- matrix(xi, nrow = nind)
+colnames(xi) <- vars
+xi
+
+pout.unco <- predict(aout, gradient = TRUE)
+mu <- pout.unco$fit
+mu <- matrix(mu, nrow = nind)
+colnames(mu) <- vars
+mu
+```
+
+## Correct for Sub-sampling
+
+### Point Estimates
+
+The fundamental relationship between conditional and unconditional means is
+$$
+   \mu_j = \mu_{p(j)} \xi_j
+$$
+So we get unconditional means by multiplying together the corresponding
+conditional mean and the unconditional mean for the predecessor.
+
+To correct for sub-sampling, we want to do the same thing except we want
+to leave out the sub-sampling arrows.  That is
+$$
+   \mu_\text{florets} = \mu_\text{panicles} \xi_\text{florets}
+$$
+
+So first we obtain these quantities.
+```{r some.means}
+
+is.florets <- grep("floret", vars)
+is.panicles <- grep("panicles", vars)
+is.florets
+is.panicles
+
+mu.panicles <- mu[ , is.panicles]
+xi.florets <- xi[ , is.florets]
+mu.florets <- mu.panicles * xi.florets
+mu.florets
+```
+
+Then (the best surrogate of) fitness (in these data)
+is the sum of these for each individual.
+```{r mean.fitness}
+mu.fit <- rowSums(mu.florets)
+mu.fit
+```
+
+## Standard Errors
+
+For reasons that will soon become apparent, we make an R function to
+do the preceding calculation.
+```{r mean.fitness.function}
+foo <- function(x) {
+    # x is xi and mu strung out as one vector
+    xi <- x[1:length(xi)]
+    mu <- x[- (1:length(xi))]
+    xi <- matrix(xi, nrow = nind)
+    mu <- matrix(mu, nrow = nind)
+    mu.panicles <- mu[ , is.panicles]
+    xi.florets <- xi[ , is.florets]
+    mu.florets <- mu.panicles * xi.florets
+    mu.fit <- rowSums(mu.florets)
+}
+```
+And we check that it does indeed give the same calculation as above.
+```{r mean.fitness.check}
+ximu <- c(xi, mu)
+all.equal(foo(ximu), mu.fit)
+```
+
+In order to derive standard errors using the delta method, we need
+Jacobian matrices (matrices of partial derivatives).
+Rather than do any calculus, we let R package `numDeriv` figure out
+the Jacobian matrix for this transformation.  We also need the Jacobian
+matrix for the transformation from the "coefficients" vector
+to the vector `ximu`.
+```{r jacobians}
+jac.foo <- jacobian(foo, ximu)
+jac.ximu <- rbind(pout.cond$gradient, pout.unco$gradient)
+```
+Now the chain rule from multivariate calculus says the Jacobian for the
+overall transformation is the product of the Jacobians for the parts.
+```{r jacobians.too.too}
+jac.total <- jac.foo %*% jac.ximu
+```
+Now the delta method says the variance-covariance matrix of all the
+fitnesses (the vector estimate `mu.fit`) is $J I^{-1} J^T$, where $J$
+is the overall Jacobian matrix `jac.total` and $I$ is Fisher information
+for the "coefficients" vector
+```{r variance}
+V <- jac.total %*% solve(aout$fisher) %*% t(jac.total)
+```
+and the standard errors are square roots of the variances (the diagonal
+elements of `V`)
+```{r se}
+se <- sqrt(diag(V))
+bar.pois <- cbind(mu.fit, se)
+colnames(bar.pois) <- c("Estimate", "SE")
+```
+```{r delta.method.pois.show,echo=FALSE}
+knitr::kable(bar.pois, digits = c(3, 3), caption =
+    "Estimated Fitness with Standard Error for Different Individuals (Poisson Distributions for Tillers and Florets)")
+```
+
+
+# Checking for Over-dispersion
+
+Following the theory for the negative binomial distribution, if the
+conditional mean value parameter is $\xi$ and the shape parameter is $\alpha$
+and the data are $y$, then the conditional variance is
+$$
+   \xi \left(1 + \frac{\xi}{\alpha} \right)
+$$
+We use this to estimate the shape parameter.  Let $A$ be a set of nodes
+all of which we think might be negative binomial with the same shape parameter,
+and let $\hat{\xi}$ be the estimated conditional mean value parameter
+vector assuming the Poisson distribution.  Then we equate empirical
+conditional variance with the formula above
+\begin{equation} \tag{$*$}
+   \sum_{j \in A} (y_j - y_{p(j)} \hat{\xi}_j)^2 =
+   \sum_{j \in A} y_{p(j)} \hat{\xi}_j
+   \left(1 + \frac{\hat{\xi}_j}{\alpha} \right)
+\end{equation}
+where $p(j)$ is the predecessor of $j$.  The right-hand side is a decreasing
+function of $\alpha$ and has infimum
+\begin{equation} \tag{${*}{*}$}
+   \sum_{j \in A} y_{p(j)} \hat{\xi}_j
+\end{equation}
+So long as the left-hand side of ($*$) is greater than (${*}{*}$) there
+will be a unique solution for $\alpha$.  Otherwise there is no solution,
+in which case
+the $y_j$ values are under-dispersed rather than over-dispersed, and
+negative binomial is not appropriate.
+
+## Tillers
+
+### Observed and Conditional Mean Values
+
+We assume the three arrows to the tillers nodes have the same over-dispersion.
+For these arrows, the predecessor is the constant 1.
+We have $y_{p(j)} = 1$ in ($*$) and (${*}{*}$).
+```{r tillers}
+is.tiller <- grepl("tiller", redata$varb)
+y.tiller <- redata$resp[is.tiller]
+xi.tiller <- xi[is.tiller]
+```
+
+### Pearson Residuals
+
+So-called Pearson residuals are deviations from the (estimated) mean
+divided by the (estimated) standard error.  For Poisson (which we used
+for the fitted model we are diagnosing now) the standard deviation is
+the square root of the mean, hence
+```{r pearson.one}
+resid.pois.t <- (y.tiller - xi.tiller) / sqrt(xi.tiller)
+stem(resid.pois.t, scale = 2)
+resid.pois.tills <- stem(resid.pois.t, scale = 2)
+```
+We do not expect such large residuals in such a small sample.
+Thus we think we need negative binomial.
+
+### Estimating Shape Parameter for Tillers
+```{r foo}
+lhs <- sum((y.tiller - xi.tiller)^2)
+rhs.min <- sum(xi.tiller)
+lhs > rhs.min
+```
+Thus we can fit negative binomial.  Write a function the zero of which
+is our estimate of the shape parameter.
+```{r shape.function.tiller}
+baz <- function(alpha) lhs - sum(xi.tiller * (1 + xi.tiller / alpha))
+```
+Then we find two points where this function has opposite signs and feed
+it to R function `uniroot`.
+```{r shape.tiller}
+baz(1)
+baz(10)
+uout <- uniroot(baz, c(1, 10), tol = sqrt(.Machine$double.eps))
+uout
+
+```
+Looks like we want negative binomial with shape parameter `r uout$root`
+for this first arrow.
+```{r famlist.one}
+famlist <- list(fam.bernoulli(), fam.poisson(),
+    fam.negative.binomial(uout$root))
+# assign the nb to all tiller nodes
+fam[grep("tillers", vars)] <- 3
+famlist
+```
+
+### Model fitting
+
+Now do everything all over again, and check for over-dispersion for florets.
+```{r refit.one.try, error=TRUE}
+aout <- aster(resp ~ varb + fit : (symp.extent + ind),
+    pred, fam, varb, id, root, data = redata, famlist = famlist)
+```
+
+To avoid convergence trouble, let's bump up the max iterations and then see if convergence comes more easily after we finalize the shape parameter estimates.
+```{r refit.one.try.maxiterup, error=TRUE}
+aout <- aster(resp ~ varb + fit : (symp.extent + ind),
+    pred, fam, varb, id, root, data = redata, famlist = famlist, maxiter = 20000)
+```
+
+## Florets
+
+Now we look at terminal arrows, using the same shape parameter for all years.
+
+### Observed, Predecessors, and Conditional Mean Values
+
+```{r floret.check}
+is.floret <- grep("floret.count.total", redata$varb)
+is.floret.pred <- grep("pans.sampled", redata$varb)
+y.floret <- redata$resp[is.floret]
+y.floret.pred <- redata$resp[is.floret.pred]
+xi.floret <- xi[is.floret]
+```
+
+### Pearson Residuals
+
+```{r pearson.too}
+resid.pois.f <- (y.floret - y.floret.pred * xi.floret) / sqrt(y.floret.pred * xi.floret)
+summary(resid.pois.f)
+stem(resid.pois.f, scale = 2)
+resid.pois.florets <- stem(resid.pois.f, scale = 2)
+```
+We do not expect such large residuals (more
+than 4 standard deviations from the mean) in such a small sample.
+Thus we think we need negative binomial.
+
+### Estimating Shape Parameter for Florets
+
+```{r foo.too}
+lhs.f <- sum((y.floret - y.floret.pred * xi.floret)^2)
+rhs.min.f <- sum(y.floret.pred * xi.floret)
+lhs.f > rhs.min.f
+```
+Thus we can fit negative binomial.  Write a function the zero of which
+is our estimate of the shape parameter.
+```{r shape.function.too}
+baz.f <- function(alpha) lhs.f -
+    sum(y.floret.pred * xi.floret * (1 + xi.floret / alpha))
+```
+Then we find two points where this function has opposite signs and feed
+it to R function `uniroot`.
+```{r shape.too}
+baz.f(1)
+baz.f(10)
+uout.f <- uniroot(baz.f, c(1, 10), tol = sqrt(.Machine$double.eps))
+uout.f
+```
+
+Looks like we want negative binomial with shape parameter `r uout.f$root`
+for these terminal arrows.
+```{r famlist.too}
+famlist <- c(famlist, list(fam.negative.binomial(uout.f$root)))
+famlist
+
+fam[grep("floret", vars)] <- 4
+fam
+```
+
+### Model Fitting
+
+Fit model with NB distributions for tillers and florets
+
+```{r refit.too, error=TRUE}
+aout <- aster(resp ~ varb + fit : (symp.extent + ind),
+    pred, fam, varb, id, root, data = redata, famlist = famlist)
+
+```
+
+
+## Redo Conditional and Unconditional Mean Value Parameters
+
+```{r aster.try.two.means, error=TRUE}
+pout.cond <- predict(aout, model.type = "conditional",
+     is.always.parameter = TRUE, gradient = TRUE)
+xi <- pout.cond$fit
+pout.unco <- predict(aout, gradient = TRUE)
+mu <- pout.unco$fit
+ximu <- c(xi, mu)
+```
+
+## Redo Jacobian matrices
+
+```{r jacobians.too}
+jac.foo <- jacobian(foo, ximu)
+jac.ximu <- rbind(pout.cond$gradient, pout.unco$gradient)
+jac.total <- jac.foo %*% jac.ximu
+
+```
+
+## Estimate fitness
+
+Re-do the delta method to estimate fitness.
+```{r delta.method.too}
+V <- jac.total %*% solve(aout$fisher) %*% t(jac.total)
+
+se <- sqrt(diag(V))
+bar.nb1 <- cbind(foo(ximu), se)
+colnames(bar.nb1) <- c("Estimate", "SE")
+```
+
+```{r delta.method.too.show,echo=FALSE}
+knitr::kable(bar.nb1, digits = c(3, 3), caption =
+    "Estimated Fitness with Standard Error for Different Individuals (Initial Negative Binomial Distributions for Tillers and Florets)")
+```
+
+# Re-estimating over-dispersion for final model
+
+Now that we have fit the `ind` model with two negative binomial distributions,
+we
+
+ * re-estimate $\xi$,
+
+ * re-estimate the negative binomial shape parameters based on this
+   new $\hat{\xi}$.
+
+And we do this repeatedly until the estimates of shape parameters converge. We'll use the initial estimates for the NB shape parameters as the starting point for the model.
+
+
+```{r refit-shapes}
+shapes.save <- lapply(famlist, function(x) x$size)
+shapes.save <- unlist(shapes.save)
+
+for (i in 1:7) {
+xi <- predict(aout, model.type = "conditional", is.always.parameter = TRUE)
+
+# tillers
+xi.tiller <- xi[is.tiller]
+
+lhs <- sum((y.tiller - xi.tiller)^2)
+rhs.min <- sum(xi.tiller)
+stopifnot(lhs > rhs.min)
+
+baz <- function(alpha) lhs - sum(xi.tiller * (1 + xi.tiller / alpha))
+uout <- uniroot(baz, c(2, 20), tol = sqrt(.Machine$double.eps),
+    extendInt = "yes")
+famlist[[3]] <- fam.negative.binomial(uout$root)
+
+# florets
+xi.floret <- xi[is.floret]
+
+lhs <- sum((y.floret - y.floret.pred * xi.floret)^2)
+rhs.min <- sum(y.floret.pred * xi.floret)
+stopifnot(lhs > rhs.min)
+
+baz <- function(alpha) lhs -
+    sum(y.floret.pred * xi.floret * (1 + xi.floret / alpha))
+uout <- uniroot(baz, c(1/2, 2), tol = sqrt(.Machine$double.eps),
+    extendInt = "yes")
+famlist[[4]] <- fam.negative.binomial(uout$root)
+
+aout <- aster(resp ~ varb + fit : (symp.extent + ind),
+    pred, fam, varb, id, root, data = redata, famlist = famlist,
+    maxiter = 20000)
+
+shapes.tmp <- lapply(famlist, function(x) x$size)
+shapes.save <- rbind(shapes.save, unlist(shapes.tmp))
+}
+rownames(shapes.save) <- NULL
+colnames(shapes.save) <- c("tillers", "florets")
+```
+
+
+Let's take a look at where the shape parameters converged for the negative binomial model.
+
+```{r refit.shapes.show.ind,echo=FALSE}
+knitr::kable(shapes.save, digits = c(4, 4), caption =
+    "Estimated shape parameters of negative binomial distributions, each row one iteration")
+```
+
+
+The initial NB shape parameter for tillers was `r round(shapes.save[1, 1], 3)`, and it converged at `r round(shapes.save[8, 1], 3)`. The change in the shape parameter for florets was less drastic. Initially, it was  `r round(shapes.save[1, 2], 3)`, and it converged at `r round(shapes.save[8, 2], 3)`.
+
+# Evaluating final model
+The famlist was automatically updated during the convergence process, so we just need to rerun the null and final model in order to compare them.
+
+```{r rerun.models}
+
+anull <- aster(resp ~ varb,pred, fam, varb, id, root, data = redata, famlist = famlist)
+
+aout <- aster(resp ~ varb + fit : (symp.extent + ind),
+    pred, fam, varb, id, root, data = redata, famlist = famlist) 
+
+anova(anull,aout)
+
+```
+
+With the final shape parameters for tillers and florets for the ind model, we didn't have any convergence trouble. We also see that our final model is still explaining a significant amount of variation relative the null.
+
+# Final fitness estimates
+
+## Get Conditional and Unconditional Mean Value Parameters
+
+```{r aster.final.xi, error=TRUE}
+
+pout.cond.f <- predict(aout, model.type = "conditional",
+     is.always.parameter = TRUE, gradient = TRUE)
+xi <- pout.cond.f$fit
+class(xi)
+length(xi) == nind * nnode
+
+xi <- matrix(xi, nrow = nind)
+colnames(xi) <- vars
+xi
+
+pout.unco.f <- predict(aout, gradient = TRUE)
+mu <- pout.unco.f$fit
+mu <- matrix(mu, nrow = nind)
+colnames(mu) <- vars
+mu
+
+```
+
+## Correcting for Sub-sampling
+
+### Point Estimates 
+```{r florets}
+is.florets <- grep("floret", vars)
+is.panicles <- grep("panicles", vars)
+is.florets
+is.panicles
+
+mu.panicles <- mu[ , is.panicles] 
+xi.florets <- xi[ , is.florets]
+mu.florets <- mu.panicles * xi.florets
+mu.florets
+
+```
+
+Now calculate the final fitness estimates.
+
+```{r mean.fitness.final}
+
+mu.fit <- rowSums(mu.florets)
+mu.fit
+
+```
+Check
+```{r mean.fitness.check.final}
+ximu <- c(xi, mu)
+all.equal(foo(ximu), mu.fit)
+
+```
+
+Final Jacobian matrices
+
+```{r jacobians.final}
+jac.foo <- jacobian(foo, ximu)
+jac.ximu <- rbind(pout.cond.f$gradient, pout.unco.f$gradient)
+jac.total <- jac.foo %*% jac.ximu
+
+```
+Delta method for final fitness estimates.
+```{r variance.final}
+V <- jac.total %*% solve(aout$fisher) %*% t(jac.total)
+```
+The standard errors are square roots of the variances (the diagonal
+elements of `V`)
+```{r se.final}
+se.final <- sqrt(diag(V))
+bar.final <- cbind(mu.fit, se.final)
+colnames(bar.final) <- c("Estimate", "SE")
+
+```
+```{r se.final.show,echo=FALSE}
+knitr::kable(bar.final, digits = c(3, 3), caption =
+    "Estimated Fitness with Standard Error for Different Individuals (Final Negative Binomial Distributions for Tillers and Florets")
+
+```
+**Caution:**  Standard errors involving negative binomial arrows do not
+account for estimating the shape parameters of these negative binomial
+distributions.  Whenever such are presented, some academic weasel wording
+must be emitted to refer to this fact.  More precisely, the standard errors
+in Table 3 assume the size parameters of the negative binomial distributions
+are known rather than estimated.  They do correctly account for sampling
+variability under that assumption, asymptotically (for sufficiently large
+sample size).  
+
+# Comparing Pearson residuals for models
+
+```{r pearson.tillers.final}
+is.tiller <- grepl("tiller", redata$varb)
+y.tiller <- redata$resp[is.tiller]
+xi.tiller <- xi[is.tiller]
+resid.t.final <- (y.tiller - xi.tiller) /
+    sqrt(xi.tiller * (1 + xi.tiller / famlist[[3]]$size))
+summary(resid.t.final)
+stem(resid.t.final, scale = 1)
+
+```
+
+Compare these to the Pearson residuals for tillers from the initial Poisson model.
+
+```{r pearson.tillers.poisson}
+stem(resid.pois.t, scale = 2)
+```
+The residual analysis for the original model (with Poisson arrows for tillers
+and florets) clearly showed the model did not fit the data because the
+residuals were far larger than standard normal (which they would be only
+for very large sample sizes, which we do not have here, but still the
+residuals are far larger than they should be).
+The residual analysis for the final model (with negative binomial arrows
+for tillers and florets) shows no lack of fit of the model data because the
+residuals are the same size as standard normal residuals would be, although
+not quite standard normal in distribution, perhaps.
+But there isn't anywhere else in aster models to go.  So we declare this
+model fits and move on (at least as far as tillers are concerned).
+
+On to florets.
+```{r pearson.floret.final}
+
+resid.f.final <-
+    (y.floret - y.floret.pred * xi.floret) /
+    sqrt(y.floret.pred * xi.floret * (1 + xi.floret / famlist[[4]]$size))
+summary(resid.f.final)
+stem(resid.f.final, scale = 2)
+
+
+```
+Compare these to initial residuals from Poisson model
+```{r pearson.florets.poisson}
+stem(resid.pois.f, scale = 2)
+```
+
+We still have the one outlier.  Clearly that one observation does
+not fit either Poisson or negative binomial model.  But the final model
+shows no other issues.  The residuals are (except for the outlier) about
+the same size as standard normal residuals.
+
+
