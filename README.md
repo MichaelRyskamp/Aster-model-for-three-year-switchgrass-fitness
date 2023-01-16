@@ -13,3 +13,5 @@ To remake the PDF file do
 This gives warnings about xcolor which seem unavoidable, a bug in Rmarkdown
 that makes it incompatible with LaTeX package tikz-cd, which is used to
 draw the aster graph.  These warnings are apparently harmless.
+
+Copyright Waiver: CC0 http://creativecommons.org/publicdomain/zero/1.0/

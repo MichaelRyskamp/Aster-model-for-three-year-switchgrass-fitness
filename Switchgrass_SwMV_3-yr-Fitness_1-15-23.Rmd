@@ -19,6 +19,14 @@ We use R package `aster` to estimate multi-year fitness with sub-sampled data,
 and we demonstrate how to estimate shape parameters for negative binomial
 distributions.
 
+
+# Copyright Waiver
+
+To the extent possible under law, the authors have dedicated all copyright
+and related and neighboring rights to this text and software to the public
+domain worldwide in accordance with the CC0 Public Domain Dedication
+<http://creativecommons.org/publicdomain/zero/1.0/>. 
+
 # R
 
  * The version of R used to make this document is `r getRversion()`.
