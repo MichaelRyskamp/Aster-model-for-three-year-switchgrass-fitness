@@ -1,7 +1,7 @@
 ---
 title: "Three-year fitness of *Panicum virgatum* infected with switchgrass mosaic virus"
 author: "Michael P. Ryskamp and Charles J. Geyer"
-date: "January 8, 2023"
+date: "January 16, 2023"
 output:
   pdf_document:
     extra_dependencies: tikz-cd
@@ -12,6 +12,12 @@ output:
 editor_options: 
   chunk_output_type: console
 ---
+
+# Abstract
+
+We use R package `aster` to estimate multi-year fitness with sub-sampled data,
+and we demonstrate how to estimate shape parameters for negative binomial
+distributions.
 
 # R
 

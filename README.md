@@ -9,3 +9,7 @@ To remake the PDF file do
     Rscript -e 'rmarkdown::render("Switchgrass_SwMV_3-yr-Fitness_1-15-23.Rmd")'
 
 (needs CRAN packages `knitr`, `aster`, and `numDeriv`).
+
+This gives warnings about xcolor which seem unavoidable, a bug in Rmarkdown
+that makes it incompatible with LaTeX package tikz-cd, which is used to
+draw the aster graph.  These warnings are apparently harmless.
