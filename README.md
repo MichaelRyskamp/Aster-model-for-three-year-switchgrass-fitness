@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/589322245.svg)](https://zenodo.org/badge/latestdoi/589322245)
 
 Supplementary material for a draft paper
 
