@@ -6,6 +6,6 @@ Supplementary material for a draft paper
 
 To remake the PDF file do
 
-    R CMD Sweave --pdf Switchgrass_SwMV_3-yr-Fitness_1-15-23.Rmd
+    Rscript -e 'rmarkdown::render("Switchgrass_SwMV_3-yr-Fitness_1-15-23.Rmd")'
 
 (needs CRAN packages `knitr`, `aster`, and `numDeriv`).
